@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#13282b">
+  <title>EXR · Online Analyzer</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-icon" aria-hidden="true">∿</span><div><strong>EXR<span class="brand-divider">/</span> ANALYZER</strong><small>WAVEFORM ACQUISITION & ANALYSIS</small></div></div>
+    <div class="instrument"><span class="led"></span><span>KEYSIGHT EXR104A</span><code id="scope-ip">192.168.10.103</code></div>
+  </header>
+  <main>
+    <div class="page-title"><div><p class="eyebrow">ACQUISITION WORKSPACE</p><h1>Online analyzer</h1><p class="subtitle">Capture triggered waveforms and monitor pulse heights in real time.</p></div><span id="mode" class="mode">HARDWARE MODE</span></div>
+    <div id="error" class="error" role="alert" hidden></div>
+    <div class="workspace">
+      <aside>
+        <form id="run-form" class="panel controls">
+          <div class="panel-heading"><h2>Acquisition settings</h2><span class="step">01 — CONFIGURE</span></div>
+          <fieldset id="settings">
+            <label for="channel">Channel <span>Signal / trigger source</span></label>
+            <div class="channel-picker" role="group" aria-label="Select channel">
+              <label><input type="radio" name="channel" value="1"><span>CH 1</span></label>
+              <label><input type="radio" name="channel" value="2"><span>CH 2</span></label>
+              <label><input type="radio" name="channel" value="3" id="channel" checked><span>CH 3</span></label>
+              <label><input type="radio" name="channel" value="4"><span>CH 4</span></label>
+            </div>
+            <label for="trigger">Trigger level <span>Hardware threshold</span></label>
+            <div class="input-unit"><input id="trigger" name="trigger_mv" type="number" value="100" step="any" min="-1000000" max="1000000" required><span>mV</span></div>
+            <label for="slope">Trigger edge</label>
+            <select id="slope" name="slope"><option value="rising">↗ Rising edge</option><option value="falling">↘ Falling edge</option><option value="either">↕ Either edge</option></select>
+            <label for="count">Waveforms <span>Target event count</span></label>
+            <input id="count" name="count" type="number" value="1000" min="1" max="1000000" step="1" required>
+            <label for="bin-width">Waveform bin width <span>μs</span></label>
+            <input id="bin-width" name="bin_width_us" type="number" value="0" min="0" max="1000000" step="any" required>
+            <p class="hint">0 uses native sample spacing on a fixed run grid. For example, 0.01 μs = 10 ns per stored bin. Pulse heights use unbinned samples inside the gate.</p>
+            <label for="gate-before">Before trigger <span>μs</span></label>
+            <input id="gate-before" name="gate_before_us" type="number" value="1" min="0" max="1000000" step="any" required>
+            <label for="gate-after">After trigger <span>μs</span></label>
+            <input id="gate-after" name="gate_after_us" type="number" value="3" min="0" max="1000000" step="any" required>
+            <p class="hint">Trigger = 0 μs. These settings control the scope timebase and the interval saved and analyzed.</p>
+            <p class="hint" id="bin-info">Gate and bin edges stay fixed throughout each run. 0 locks the first event's native interval.</p>
+            <details><summary>Storage & analysis settings</summary>
+              <label for="next-file">Next run file <span>Automatic</span></label><input id="next-file" value="run00001.dat" readonly>
+              <p class="hint" id="data-dir">/mnt/exr104a-data</p>
+              <label for="baseline">Baseline samples</label><input id="baseline" name="baseline_samples" type="number" min="1" step="1" placeholder="Auto: first 10% of waveform">
+              <p class="hint">Trigger wait is unlimited. Use Stop acquisition to cancel.</p>
+              <p class="hint">Baseline samples are counted from the start of the selected gate. Use a flat region before the pulse. Vertical scale uses the current scope setting.</p>
+            </details>
+          </fieldset>
+          <button id="start" class="button primary" type="submit"><span aria-hidden="true">▶</span> Start acquisition</button>
+          <button id="stop" class="button secondary" type="button" disabled><span aria-hidden="true">■</span> Stop acquisition</button>
+          <p class="hint control-note">Settings apply when acquisition starts.<br>Stop the run before changing settings.</p>
+        </form>
+        <div class="storage-note"><span class="storage-icon" aria-hidden="true">▤</span><div><strong>Automatic run storage</strong><p>Binned 16-bit ADC · HDF5 in .dat files<br>run00001.dat → run00002.dat</p></div></div>
+      </aside>
+      <section class="dashboard" aria-label="Live analysis">
+        <div class="run-strip"><div><span id="status-dot" class="status-dot"></span><strong id="status" role="status">Checking connection</strong><span id="applied">CH 3 · 100 mV · Rising</span></div><span id="updated">Updates every second</span></div>
+        <div class="stats">
+          <article class="panel stat"><p>SAVED WAVEFORMS</p><div><strong id="saved">0</strong><span id="target">/ 0</span></div><div class="progress" role="progressbar" aria-label="Acquisition progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="progress"></i></div></article>
+          <article class="panel stat"><p>ACQUISITION RATE</p><div><strong id="rate">—</strong><span>events/s</span></div><small>Includes trigger wait, transfer & storage</small></article>
+          <article class="panel stat"><p>ELAPSED TIME</p><div><strong id="elapsed">00:00</strong></div><small id="points">Waiting for waveform</small></article>
+          <article class="panel stat"><p>FILE SIZE</p><div><strong id="file-size">0</strong><span id="file-unit">MB</span></div><small>HDF5 file size</small></article>
+        </div>
+        <article class="panel chart-panel">
+          <div class="chart-heading"><div><p class="eyebrow">PULSE HEIGHT DISTRIBUTION</p><h2>Pulse height histogram</h2></div><div class="chart-options"><label class="sr-only" for="metric">Analysis metric</label><select id="metric"><option value="positive_height_v">Positive height · Max − Baseline</option><option value="negative_height_v">Negative height · Baseline − Min</option><option value="max_v">Maximum voltage · Max</option><option value="min_v">Minimum voltage · Min</option></select><label for="bins">Bins <input id="bins" type="number" value="60" min="5" max="500" step="1"></label></div></div>
+          <div class="chart-meta"><span><i class="legend-swatch"></i> Event distribution</span><span>Mean <strong id="mean">—</strong></span><span>σ <strong id="std">—</strong></span></div>
+          <div id="histogram" class="chart" aria-label="Histogram of per-waveform heights"><div class="empty"><span class="empty-bars" aria-hidden="true">▂ ▅ █ ▆ ▃</span><strong>Waiting for the first waveform</strong><p>Choose a channel and trigger, then start acquisition.</p></div></div>
+          <div class="chart-footer"><span>One height per waveform · mV</span><span id="hist-count">0 events</span></div>
+        </article>
+        <article class="panel chart-panel waveform-panel">
+          <div class="chart-heading"><div><p class="eyebrow">LATEST EVENT</p><h2>Latest waveform</h2></div><span class="preview-label">PEAK-PRESERVING PREVIEW</span></div>
+          <div id="waveform" class="chart waveform-chart" aria-label="Latest waveform preview"><div class="empty"><span class="empty-wave" aria-hidden="true">─∿─</span><strong>No waveform captured yet</strong><p>Preview and pulse heights use the unbinned waveform.</p></div></div>
+          <div class="chart-footer"><span id="baseline-info">Baseline: mean of the first 10%</span><span>Time μs / Voltage mV</span></div>
+        </article>
+        <div class="output-line"><span>RUN STARTED</span><time id="run-started">—</time></div>
+        <div class="output-line"><span>OUTPUT</span><code id="output">The output path will appear when acquisition starts</code></div>
+      </section>
+    </div>
+    <footer>EXR104A DAQ <span>Local acquisition · Python</span></footer>
+  </main>
+</body>
+</html>
