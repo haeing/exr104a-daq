@@ -13,7 +13,10 @@ const format = (n, digits=2) => Number(n).toLocaleString("en-US", {maximumFracti
 function showError(message) { $("error").hidden = !message; $("error").textContent = message || ""; }
 function buttons() {
   $("start").disabled = busy || sending;
-  $("stop").disabled = !busy || sending || lastState?.status === "stopping";
+  const canStop = busy && activeStates.has(lastState?.status) && lastState.status !== "stopping";
+  $("stop").disabled = !canStop || sending;
+  $("comment").disabled = sending;
+  $("add-comment").disabled = sending || !lastState || !$("comment").value.trim();
   $("settings").disabled = busy || sending;
 }
 async function post(path, data) {
@@ -26,15 +29,35 @@ $("run-form").addEventListener("submit", async event => {
   if (sending || busy) return;
   const data = Object.fromEntries(new FormData(event.target));
   sending = true; buttons(); showError("");
-  try { await post("/api/start", data); busy = true; }
+  try {
+    await post("/api/start", data);
+    busy = true;
+    lastState = null;
+    $("comment-feedback").textContent = "";
+  }
   catch (error) { showError(error.message); }
   finally { sending = false; buttons(); }
 });
 $("stop").addEventListener("click", async () => {
   sending = true; buttons();
-  try { await post("/api/stop", {}); }
+  try {
+    await post("/api/stop", {run_number:lastState.run_number});
+  }
   catch (error) { showError(error.message); }
   finally { sending = false; buttons(); }
+});
+$("add-comment").addEventListener("click", async () => {
+  sending = true; buttons();
+  try {
+    await post("/api/comment", {run_number:lastState.run_number, comment:$("comment").value});
+    $("comment-feedback").textContent = "Comment added.";
+  } catch (error) {
+    $("comment-feedback").textContent = error.message;
+  } finally { sending = false; buttons(); }
+});
+$("comment").addEventListener("input", () => {
+  $("comment-feedback").textContent = "";
+  buttons();
 });
 
 function svgElement(name, attributes={}, text="") {
@@ -98,7 +121,10 @@ function drawWaveform(state) {
 }
 function render(state) {
   // A new run may contain the same event count as the previous run.
-  if(state.started_utc!==lastState?.started_utc) {lastHistKey="";lastWaveKey="";}
+  if(state.run_number!==lastState?.run_number) {
+    lastHistKey=""; lastWaveKey="";
+    $("comment-feedback").textContent = "";
+  }
   lastState=state; busy=activeStates.has(state.status); buttons();
   $("status").textContent=statusLabels[state.status] || state.status;
   $("status-dot").className="status-dot"+(busy?" active":state.status==="failed"?" failed":"");
@@ -118,8 +144,13 @@ function render(state) {
   $("progress").style.width=`${progress}%`;
   $("progress").parentElement.setAttribute("aria-valuenow",String(Math.round(progress)));
   $("output").textContent=state.output || "The output path will appear when acquisition starts";
-  $("run-started").textContent=state.started_utc?new Date(state.started_utc).toLocaleString("en-GB",{year:"numeric",month:"short",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false,timeZoneName:"short"}):"—";
-  $("run-started").dateTime=state.started_utc || "";
+  for (const [id, timestamp] of [["run-started", state.started_utc], ["run-ended", state.ended_utc]]) {
+    $(id).textContent = timestamp ? new Date(timestamp).toLocaleString("en-GB", {
+      year:"numeric", month:"short", day:"2-digit", hour:"2-digit", minute:"2-digit",
+      second:"2-digit", hour12:false, timeZoneName:"short"
+    }) : "—";
+    $(id).dateTime = timestamp || "";
+  }
   $("hist-count").textContent=`${format(state.saved,0)} events`;
   $("mean").textContent=state.histogram.mean===null?"—":`${format(state.histogram.mean*1000,3)} mV`;
   $("std").textContent=state.histogram.std===null?"—":`${format(state.histogram.std*1000,3)} mV`;

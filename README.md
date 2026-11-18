@@ -116,6 +116,17 @@ Existing files are never overwritten. Run numbering checks existing `run*.dat` f
 with a file lock to coordinate number allocation. Numbering continues after a server restart.
 Numbers are reserved when a run starts, so failed connections or aborted runs can leave gaps.
 
+Web acquisitions write a `START` and an `END` line to `run-log.txt` in the same data directory.
+When a run fails, its `END` line includes the error message.
+Each line contains the run number, event, a Korea Standard Time (KST) timestamp to the second,
+and optional comment as tab-separated
+fields. Comments are quoted, and line breaks in a comment are escaped.
+Text in the **Comment** field is recorded on the `START` line when you start acquisition.
+Use **Add comment** during acquisition or after it ends to append a timestamped
+`COMMENT` line for the current run. You can also add a comment before the first run, when the
+log uses `-` for the run number. The text stays in the field after starting or adding a comment
+so you can edit or reuse it.
+
 ### Demo mode
 
 To test the GUI and file storage without connecting to hardware:

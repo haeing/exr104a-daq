@@ -1,11 +1,29 @@
 """Persistent run numbering shared by CLI and web acquisition on Linux."""
 
+from datetime import datetime
 import fcntl
+import json
 import os
 from pathlib import Path
 import re
+from zoneinfo import ZoneInfo
 
 DEFAULT_DATA_DIR = "/mnt/exr104a-data"
+RUN_LOG_NAME = "run-log.txt"
+KST = ZoneInfo("Asia/Seoul")
+
+
+def write_run_log(directory, number, event, timestamp, comment):
+    """Write one tab-separated line per event, with a JSON-quoted comment."""
+    path = Path(directory) / RUN_LOG_NAME
+    run_label = "-" if number is None else f"{number:05d}"
+    prefix = f"{run_label}\t{event}\t"
+    timestamp = datetime.fromisoformat(timestamp).astimezone(KST).strftime("%Y-%m-%dT%H:%M:%S")
+    line = f"{prefix}{timestamp}\t{json.dumps(comment, ensure_ascii=False)}\n"
+    with path.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(line)
 
 
 def next_run_number(directory):

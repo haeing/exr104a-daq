@@ -5,3 +5,35 @@
 
 #data-dir{overflow-wrap:anywhere}fieldset>.hint{grid-column:1/-1;margin-bottom:0}
 .output-line+.output-line{margin-top:10px}#run-started{font-variant-numeric:tabular-nums;font-size:12px;color:#4b635d}
+
+.comment-label {
+  display: flex;
+  justify-content: space-between;
+  margin: 16px 0 9px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.controls textarea {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid #d9e2df;
+  border-radius: 5px;
+  color: var(--ink);
+  background: #fff;
+  font: inherit;
+  resize: vertical;
+}
+
+.controls textarea:focus {
+  outline: 2px solid #81baaa;
+  outline-offset: 2px;
+}
+
+.controls textarea:disabled {
+  opacity: .65;
+}
+
+#comment-feedback:empty {
+  display: none;
+}

@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlparse
 
 from exr_daq import Store, dependencies, utc_now, gate_waveform, storage_factor
 from scope import CaptureCancelled, Preamble, Scope
-from runfiles import DEFAULT_DATA_DIR, allocate_run, next_run_number
+from runfiles import DEFAULT_DATA_DIR, allocate_run, next_run_number, write_run_log
 from connection import open_instrument
 
 STATIC = Path(__file__).resolve().parent / "web"
@@ -34,6 +34,16 @@ def number(value, name, low, high, integer=False):
     return int(result) if integer else result
 
 
+def comment(value):
+    if not isinstance(value, str) or len(value) > 1000 or "\0" in value:
+        raise ValueError("Enter a comment of up to 1,000 characters")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("Comment must contain valid Unicode text") from exc
+    return value.strip()
+
+
 def validate_config(body):
     if not isinstance(body, dict):
         raise ValueError("Settings must be a JSON object")
@@ -47,6 +57,7 @@ def validate_config(body):
         "bin_width_us": number(body.get("bin_width_us", 0), "Bin width (us)", 0, 1000000),
         "gate_before_us": number(body.get("gate_before_us", 1), "Before trigger (us)", 0, 1000000),
         "gate_after_us": number(body.get("gate_after_us", 3), "After trigger (us)", 0, 1000000),
+        "start_comment": comment(body.get("comment", "")),
     }
     if config["slope"] not in ("rising", "falling", "either"):
         raise ValueError("Select a valid trigger edge")
@@ -88,7 +99,7 @@ class Analyzer:
         self.state = {"status": "idle", "saved": 0, "target": 0, "error": "", "output": "",
                       "points": 0, "baseline_samples": 0, "elapsed_s": 0, "rate_hz": 0,
                       "bytes": 0, "waveform": None, "latest": None, "config": None,
-                      "started_utc": None}
+                      "started_utc": None, "ended_utc": None}
         self.state.update(stored_points=0, run_number=None, actual_bin_width_us=0, acquired_points=0)
         self.started = None
 
@@ -103,10 +114,12 @@ class Analyzer:
                 raise RuntimeError("Acquisition is already running. Stop the run before changing settings.")
             try:
                 output, run_number = allocate_run(self.data_dir)
+                started_utc = utc_now()
+                write_run_log(self.data_dir, run_number, "START", started_utc, config["start_comment"])
             except OSError as exc:
                 raise ValueError(f"Cannot write to data directory {self.data_dir}: {exc}") from exc
             config.update(filename=output.name, run_number=run_number)
-            config["started_utc"] = utc_now()
+            config["started_utc"] = started_utc
             self.stop_event.clear()
             self.values = {metric: array("d") for metric in METRICS}
             self.started = time.monotonic()
@@ -114,15 +127,27 @@ class Analyzer:
                               output=str(output), points=0, baseline_samples=0, bytes=0,
                               waveform=None, latest=None, config=config, started_utc=config["started_utc"],
                               elapsed_s=0, rate_hz=0, stored_points=0, run_number=run_number,
-                              actual_bin_width_us=0, acquired_points=0)
+                              actual_bin_width_us=0, acquired_points=0,
+                              ended_utc=None)
             self.thread = threading.Thread(target=self.run, args=(config, output), daemon=True)
             self.thread.start()
 
-    def stop(self):
+    def stop(self, run_number=None):
         with self.lock:
-            if self.thread is not None and self.thread.is_alive():
+            if run_number is not None and run_number != self.state["run_number"]:
+                raise RuntimeError("The current run has changed")
+            if self.state["status"] in ("connecting", "running", "stopping"):
                 self.stop_event.set()
                 self.state["status"] = "stopping"
+
+    def add_comment(self, value, run_number):
+        if not value:
+            raise ValueError("Enter a comment to add")
+        with self.lock:
+            if run_number != self.state["run_number"]:
+                raise RuntimeError("The current run has changed")
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            write_run_log(self.data_dir, run_number, "COMMENT", utc_now(), value)
 
     def snapshot(self, metric="positive_height_v", bins=60):
         if metric not in METRICS:
@@ -131,7 +156,7 @@ class Analyzer:
         with self.lock:
             result = dict(self.state)
             values = array("d", self.values[metric])
-            if self.started is not None and self.thread and self.thread.is_alive():
+            if self.started is not None and result["ended_utc"] is None:
                 result["elapsed_s"] = time.monotonic() - self.started
             result["rate_hz"] = result["saved"] / max(result["elapsed_s"], 0.001)
         histogram = {"edges": [], "counts": [], "mean": None, "std": None, "metric": metric}
@@ -196,8 +221,6 @@ class Analyzer:
                                                gate_before_us=config["gate_before_us"],
                                                gate_after_us=config["gate_after_us"])
                 store = Store(output, {**config, "ip": self.ip, "demo": self.demo}, identity)
-                # Keep the writer on this worker; HTTP handlers never read active HDF5.
-                stack.callback(store.close)
                 self.update(status="stopping" if self.stop_event.is_set() else "running")
                 try:
                     for _ in range(config["count"]):
@@ -227,12 +250,30 @@ class Analyzer:
                 except Exception as exc:
                     store.file.attrs["error"] = str(exc)
                     raise
-                finally:
-                    store.file.attrs["status"] = final_status
         except Exception as exc:
-            self.update(error=str(exc))
+            final_status = "failed"
+            self.update(error=str(exc) or type(exc).__name__)
         finally:
-            self.update(status=final_status, elapsed_s=time.monotonic() - self.started)
+            with self.lock:
+                ended_utc = utc_now()
+                if store is not None:
+                    try:
+                        try:
+                            store.file.attrs.update(status=final_status, run_ended_utc=ended_utc)
+                        finally:
+                            store.close()
+                        self.state["bytes"] = output.stat().st_size
+                    except Exception as exc:
+                        final_status = "failed"
+                        self.state["error"] = str(exc) or type(exc).__name__
+                end_comment = f"ERROR: {self.state['error']}" if final_status == "failed" else ""
+                try:
+                    write_run_log(self.data_dir, config["run_number"], "END", ended_utc, end_comment)
+                except OSError as exc:
+                    final_status = "failed"
+                    self.state["error"] = f"Cannot write run log: {exc}"
+                self.state.update(status=final_status, ended_utc=ended_utc,
+                                  elapsed_s=time.monotonic() - self.started)
 
 
 def make_handler(analyzer):
@@ -278,13 +319,23 @@ def make_handler(analyzer):
                 return
             try:
                 length = int(self.headers.get("Content-Length", 0))
-                if not 0 < length <= 8192:
+                if not 0 < length <= 16384:
                     raise ValueError("Invalid request size")
                 body = json.loads(self.rfile.read(length))
                 if self.path == "/api/start":
                     analyzer.start(body)
-                elif self.path == "/api/stop":
-                    analyzer.stop()
+                elif self.path in ("/api/stop", "/api/comment"):
+                    if not isinstance(body, dict):
+                        raise ValueError("Expected a JSON object")
+                    run_number = body.get("run_number")
+                    if self.path == "/api/stop":
+                        if run_number is not None and type(run_number) is not int:
+                            raise ValueError("Expected a run number")
+                        analyzer.stop(run_number)
+                    else:
+                        if "run_number" not in body or (run_number is not None and type(run_number) is not int):
+                            raise ValueError("Expected a run number")
+                        analyzer.add_comment(comment(body.get("comment")), run_number)
                 else:
                     self.json_reply(404, {"error": "Not found"})
                     return
@@ -293,6 +344,8 @@ def make_handler(analyzer):
                 self.json_reply(400, {"error": str(exc)})
             except RuntimeError as exc:
                 self.json_reply(409, {"error": str(exc)})
+            except OSError as exc:
+                self.json_reply(500, {"error": str(exc)})
 
         def log_message(self, format, *args):
             pass

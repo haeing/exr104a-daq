@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from email.message import Message
 from html.parser import HTMLParser
 from io import BytesIO
@@ -81,6 +82,13 @@ class HandlerTests(unittest.TestCase):
         self.assertEqual(reply["code"], 400)
         self.assertIsNone(self.analyzer.thread)
 
+    def test_comment_before_first_run(self):
+        reply = self.request("POST", "/api/comment", {"run_number": None, "comment": "측정 준비"})
+        self.assertEqual(reply["code"], 202)
+        line = (Path(self.tmp.name) / "run-log.txt").read_text(encoding="utf-8").strip()
+        run_number, event, _, saved_comment = line.split("\t")
+        self.assertEqual((run_number, event, json.loads(saved_comment)), ("-", "COMMENT", "측정 준비"))
+
     def test_foreign_origin_cannot_start(self):
         reply = self.request("POST", "/api/start", {}, origin="https://example.org")
         self.assertEqual(reply["code"], 403)
@@ -150,7 +158,8 @@ class RunTests(unittest.TestCase):
         deadline = time.monotonic() + 5
         while self.analyzer.snapshot()["saved"] < 1 and time.monotonic() < deadline:
             time.sleep(0.02)
-        self.analyzer.stop()
+        self.analyzer.add_comment("수동 종료 예정", run_number=1)
+        self.analyzer.stop(run_number=1)
         self.wait()
         state = self.analyzer.snapshot()
         self.assertEqual(state["status"], "stopped", state["error"])
@@ -158,6 +167,31 @@ class RunTests(unittest.TestCase):
         with h5py.File(state["output"], "r") as f:
             self.assertEqual(f.attrs["committed_events"], state["saved"])
             self.assertEqual(f.attrs["status"], "stopped")
+        lines = (Path(self.tmp.name) / "run-log.txt").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(lines[1].split("\t")[-1], '"수동 종료 예정"')
+        ended = datetime.fromisoformat(state["ended_utc"]).astimezone(timezone(timedelta(hours=9))).strftime("%Y-%m-%dT%H:%M:%S")
+        self.assertEqual(lines[2].split("\t"), ["00001", "END", ended, '""'])
+
+    def test_comment_adds_a_line_after_auto_completion(self):
+        self.analyzer.start({"count": 1, "comment": "실험 시작\nCH 3"})
+        self.wait()
+        state = self.analyzer.snapshot()
+        self.assertEqual(state["status"], "complete", state["error"])
+        self.analyzer.add_comment("자동 종료 확인", state["run_number"])
+        self.analyzer.add_comment("추가 기록", state["run_number"])
+        lines = (Path(self.tmp.name) / "run-log.txt").read_text(encoding="utf-8").splitlines()
+        started = datetime.fromisoformat(state["started_utc"]).astimezone(timezone(timedelta(hours=9))).strftime("%Y-%m-%dT%H:%M:%S")
+        ended = datetime.fromisoformat(state["ended_utc"]).astimezone(timezone(timedelta(hours=9))).strftime("%Y-%m-%dT%H:%M:%S")
+        self.assertEqual(lines[:2], [
+            f'00001\tSTART\t{started}\t"실험 시작\\nCH 3"',
+            f'00001\tEND\t{ended}\t""',
+        ])
+        self.assertEqual(len(lines), 4)
+        for line, value in zip(lines[2:], ("자동 종료 확인", "추가 기록")):
+            run_number, event, timestamp, saved_comment = line.split("\t")
+            self.assertEqual((run_number, event, json.loads(saved_comment)), ("00001", "COMMENT", value))
+            self.assertRegex(timestamp, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")
+            self.assertGreaterEqual(timestamp, ended)
 
     def test_existing_output_never_overwritten(self):
         path = Path(self.tmp.name) / "run00001.dat"
@@ -169,10 +203,18 @@ class RunTests(unittest.TestCase):
 
     def test_storage_failure_reported(self):
         with patch("web_gui.Store", side_effect=OSError("disk full")):
-            self.analyzer.start({"count": 1})
+            self.analyzer.start({"count": 1, "comment": "실험 시작"})
             self.wait()
-        self.assertEqual(self.analyzer.snapshot()["status"], "failed")
-        self.assertIn("disk full", self.analyzer.snapshot()["error"])
+        state = self.analyzer.snapshot()
+        self.assertEqual(state["status"], "failed")
+        self.assertIn("disk full", state["error"])
+        self.analyzer.add_comment("장비 확인", state["run_number"])
+        lines = (Path(self.tmp.name) / "run-log.txt").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(
+            [(fields[0], fields[1], json.loads(fields[3])) for fields in (line.split("\t") for line in lines)],
+            [("00001", "START", "실험 시작"), ("00001", "END", "ERROR: disk full"),
+             ("00001", "COMMENT", "장비 확인")],
+        )
 
     def test_bin_width_us_gate_and_stored_time_axis(self):
         import h5py
