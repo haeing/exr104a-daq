@@ -117,7 +117,8 @@ with a file lock to coordinate number allocation. Numbering continues after a se
 Numbers are reserved when a run starts, so failed connections or aborted runs can leave gaps.
 
 Web acquisitions write a `START` and an `END` line to `run-log.txt` in the same data directory.
-When a run fails, its `END` line includes the error message.
+The `END` line includes the latest comment text received during the run, plus the error message
+if the run failed.
 Each line contains the run number, event, a Korea Standard Time (KST) timestamp to the second,
 and optional comment as tab-separated
 fields. Comments are quoted, and line breaks in a comment are escaped.

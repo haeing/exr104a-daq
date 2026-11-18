@@ -102,6 +102,7 @@ class Analyzer:
                       "started_utc": None, "ended_utc": None}
         self.state.update(stored_points=0, run_number=None, actual_bin_width_us=0, acquired_points=0)
         self.started = None
+        self.comment_draft = ""
 
     def update(self, **kwargs):
         with self.lock:
@@ -120,6 +121,7 @@ class Analyzer:
                 raise ValueError(f"Cannot write to data directory {self.data_dir}: {exc}") from exc
             config.update(filename=output.name, run_number=run_number)
             config["started_utc"] = started_utc
+            self.comment_draft = config["start_comment"]
             self.stop_event.clear()
             self.values = {metric: array("d") for metric in METRICS}
             self.started = time.monotonic()
@@ -132,13 +134,22 @@ class Analyzer:
             self.thread = threading.Thread(target=self.run, args=(config, output), daemon=True)
             self.thread.start()
 
-    def stop(self, run_number=None):
+    def stop(self, run_number=None, draft=None):
         with self.lock:
             if run_number is not None and run_number != self.state["run_number"]:
                 raise RuntimeError("The current run has changed")
             if self.state["status"] in ("connecting", "running", "stopping"):
+                if draft is not None:
+                    self.comment_draft = draft
                 self.stop_event.set()
                 self.state["status"] = "stopping"
+
+    def set_comment_draft(self, value, run_number):
+        with self.lock:
+            if run_number != self.state["run_number"]:
+                raise RuntimeError("The current run has changed")
+            if self.state["ended_utc"] is None:
+                self.comment_draft = value
 
     def add_comment(self, value, run_number):
         if not value:
@@ -266,7 +277,10 @@ class Analyzer:
                     except Exception as exc:
                         final_status = "failed"
                         self.state["error"] = str(exc) or type(exc).__name__
-                end_comment = f"ERROR: {self.state['error']}" if final_status == "failed" else ""
+                end_comment = self.comment_draft
+                if final_status == "failed":
+                    error = f"ERROR: {self.state['error']}"
+                    end_comment = f"{end_comment}\n{error}" if end_comment else error
                 try:
                     write_run_log(self.data_dir, config["run_number"], "END", ended_utc, end_comment)
                 except OSError as exc:
@@ -324,14 +338,19 @@ def make_handler(analyzer):
                 body = json.loads(self.rfile.read(length))
                 if self.path == "/api/start":
                     analyzer.start(body)
-                elif self.path in ("/api/stop", "/api/comment"):
+                elif self.path in ("/api/stop", "/api/comment", "/api/comment-draft"):
                     if not isinstance(body, dict):
                         raise ValueError("Expected a JSON object")
                     run_number = body.get("run_number")
                     if self.path == "/api/stop":
                         if run_number is not None and type(run_number) is not int:
                             raise ValueError("Expected a run number")
-                        analyzer.stop(run_number)
+                        draft = comment(body["comment"]) if "comment" in body else None
+                        analyzer.stop(run_number, draft)
+                    elif self.path == "/api/comment-draft":
+                        if type(run_number) is not int:
+                            raise ValueError("Expected a run number")
+                        analyzer.set_comment_draft(comment(body.get("comment")), run_number)
                     else:
                         if "run_number" not in body or (run_number is not None and type(run_number) is not int):
                             raise ValueError("Expected a run number")

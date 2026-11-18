@@ -159,7 +159,7 @@ class RunTests(unittest.TestCase):
         while self.analyzer.snapshot()["saved"] < 1 and time.monotonic() < deadline:
             time.sleep(0.02)
         self.analyzer.add_comment("수동 종료 예정", run_number=1)
-        self.analyzer.stop(run_number=1)
+        self.analyzer.stop(run_number=1, draft="수동 종료 기록")
         self.wait()
         state = self.analyzer.snapshot()
         self.assertEqual(state["status"], "stopped", state["error"])
@@ -170,10 +170,11 @@ class RunTests(unittest.TestCase):
         lines = (Path(self.tmp.name) / "run-log.txt").read_text(encoding="utf-8").splitlines()
         self.assertEqual(lines[1].split("\t")[-1], '"수동 종료 예정"')
         ended = datetime.fromisoformat(state["ended_utc"]).astimezone(timezone(timedelta(hours=9))).strftime("%Y-%m-%dT%H:%M:%S")
-        self.assertEqual(lines[2].split("\t"), ["00001", "END", ended, '""'])
+        self.assertEqual(lines[2].split("\t"), ["00001", "END", ended, '"수동 종료 기록"'])
 
     def test_comment_adds_a_line_after_auto_completion(self):
         self.analyzer.start({"count": 1, "comment": "실험 시작\nCH 3"})
+        self.analyzer.set_comment_draft("자동 종료 기록", run_number=1)
         self.wait()
         state = self.analyzer.snapshot()
         self.assertEqual(state["status"], "complete", state["error"])
@@ -184,7 +185,7 @@ class RunTests(unittest.TestCase):
         ended = datetime.fromisoformat(state["ended_utc"]).astimezone(timezone(timedelta(hours=9))).strftime("%Y-%m-%dT%H:%M:%S")
         self.assertEqual(lines[:2], [
             f'00001\tSTART\t{started}\t"실험 시작\\nCH 3"',
-            f'00001\tEND\t{ended}\t""',
+            f'00001\tEND\t{ended}\t"자동 종료 기록"',
         ])
         self.assertEqual(len(lines), 4)
         for line, value in zip(lines[2:], ("자동 종료 확인", "추가 기록")):
@@ -212,7 +213,7 @@ class RunTests(unittest.TestCase):
         lines = (Path(self.tmp.name) / "run-log.txt").read_text(encoding="utf-8").splitlines()
         self.assertEqual(
             [(fields[0], fields[1], json.loads(fields[3])) for fields in (line.split("\t") for line in lines)],
-            [("00001", "START", "실험 시작"), ("00001", "END", "ERROR: disk full"),
+            [("00001", "START", "실험 시작"), ("00001", "END", "실험 시작\nERROR: disk full"),
              ("00001", "COMMENT", "장비 확인")],
         )
 

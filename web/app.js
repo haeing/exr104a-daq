@@ -8,6 +8,7 @@ let sending = false;
 let lastState = null;
 let lastWaveKey = "";
 let lastHistKey = "";
+let draftRequest = Promise.resolve();
 const format = (n, digits=2) => Number(n).toLocaleString("en-US", {maximumFractionDigits:digits});
 
 function showError(message) { $("error").hidden = !message; $("error").textContent = message || ""; }
@@ -41,7 +42,9 @@ $("run-form").addEventListener("submit", async event => {
 $("stop").addEventListener("click", async () => {
   sending = true; buttons();
   try {
-    await post("/api/stop", {run_number:lastState.run_number});
+    const data = {run_number:lastState.run_number, comment:$("comment").value};
+    await draftRequest;
+    await post("/api/stop", data);
   }
   catch (error) { showError(error.message); }
   finally { sending = false; buttons(); }
@@ -58,6 +61,11 @@ $("add-comment").addEventListener("click", async () => {
 $("comment").addEventListener("input", () => {
   $("comment-feedback").textContent = "";
   buttons();
+  if (!busy || !lastState?.run_number) return;
+  const data = {run_number:lastState.run_number, comment:$("comment").value};
+  draftRequest = draftRequest
+    .then(() => post("/api/comment-draft", data))
+    .catch(error => { $("comment-feedback").textContent = error.message; });
 });
 
 function svgElement(name, attributes={}, text="") {
