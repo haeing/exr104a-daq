@@ -37,3 +37,8 @@
 #comment-feedback:empty {
   display: none;
 }
+
+#run-comment {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

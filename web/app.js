@@ -132,6 +132,18 @@ function render(state) {
   if(state.run_number!==lastState?.run_number) {
     lastHistKey=""; lastWaveKey="";
     $("comment-feedback").textContent = "";
+    if (state.config) {
+      const fields = $("run-form").elements;
+      const config = state.config;
+      fields.namedItem("channel").value = String(config.channel);
+      $("trigger").value = Number((config.trigger_level * 1000).toPrecision(15));
+      $("slope").value = config.slope;
+      $("count").value = config.count;
+      $("bin-width").value = config.bin_width_us;
+      $("gate-before").value = config.gate_before_us;
+      $("gate-after").value = config.gate_after_us;
+      $("baseline").value = config.baseline_samples ?? "";
+    }
   }
   lastState=state; busy=activeStates.has(state.status); buttons();
   $("status").textContent=statusLabels[state.status] || state.status;
@@ -152,6 +164,7 @@ function render(state) {
   $("progress").style.width=`${progress}%`;
   $("progress").parentElement.setAttribute("aria-valuenow",String(Math.round(progress)));
   $("output").textContent=state.output || "The output path will appear when acquisition starts";
+  $("run-comment").textContent = state.run_comment || "—";
   for (const [id, timestamp] of [["run-started", state.started_utc], ["run-ended", state.ended_utc]]) {
     $(id).textContent = timestamp ? new Date(timestamp).toLocaleString("en-GB", {
       year:"numeric", month:"short", day:"2-digit", hour:"2-digit", minute:"2-digit",

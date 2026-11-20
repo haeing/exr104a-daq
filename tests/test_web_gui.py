@@ -180,6 +180,7 @@ class RunTests(unittest.TestCase):
         self.assertEqual(state["status"], "complete", state["error"])
         self.analyzer.add_comment("자동 종료 확인", state["run_number"])
         self.analyzer.add_comment("추가 기록", state["run_number"])
+        self.assertEqual(self.analyzer.snapshot()["run_comment"], "추가 기록")
         lines = (Path(self.tmp.name) / "run-log.txt").read_text(encoding="utf-8").splitlines()
         started = datetime.fromisoformat(state["started_utc"]).astimezone(timezone(timedelta(hours=9))).strftime("%Y-%m-%dT%H:%M:%S")
         ended = datetime.fromisoformat(state["ended_utc"]).astimezone(timezone(timedelta(hours=9))).strftime("%Y-%m-%dT%H:%M:%S")

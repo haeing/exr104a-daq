@@ -44,6 +44,18 @@ Open **http://127.0.0.1:8000** and click **Start acquisition**.
 Starting the server or opening the page does not start acquisition.
 The default server is accessible from this PC only.
 
+### Access from another computer on the same network
+
+On the DAQ server, run:
+
+```bash
+.venv/bin/python web_gui.py --host 192.168.10.4 --port 8000
+```
+
+Run `hostname -I` on the DAQ server to find its IP address on the shared network.
+On the other computer, open `http://192.168.10.4:8000` in a browser for the current DAQ server.
+Use this on a trusted network. Anyone who can reach the web GUI can view, start, and stop acquisitions.
+
 | Setting | Default | Description |
 | --- | --- | --- |
 | Channel | CH3 | Acquisition channel and trigger source; CH1–CH4 supported. |

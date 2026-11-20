@@ -159,6 +159,8 @@ class Analyzer:
                 raise RuntimeError("The current run has changed")
             self.data_dir.mkdir(parents=True, exist_ok=True)
             write_run_log(self.data_dir, run_number, "COMMENT", utc_now(), value)
+            if run_number is not None:
+                self.comment_draft = value
 
     def snapshot(self, metric="positive_height_v", bins=60):
         if metric not in METRICS:
@@ -166,6 +168,7 @@ class Analyzer:
         bins = number(bins, "Bins", 5, 500, True)
         with self.lock:
             result = dict(self.state)
+            result["run_comment"] = self.comment_draft
             values = array("d", self.values[metric])
             if self.started is not None and result["ended_utc"] is None:
                 result["elapsed_s"] = time.monotonic() - self.started
